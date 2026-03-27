@@ -1,0 +1,158 @@
+---
+title: "QuickAdapt Pipeline v2: Make Backbone + Compute Services"
+---
+flowchart TD
+    %% ── LEGEND ───────────────────────────────────────────
+    subgraph LEGEND[" Legend "]
+        direction LR
+        L_MAKE["🌐 = Make Workflow Layer"]
+        L_COMPUTE["🖥️ = Compute Service"]
+        L_MAKE ~~~ L_COMPUTE
+    end
+
+    %% ── INTAKE (Make) ────────────────────────────────────
+    subgraph INTAKE["🌐 Make: Intake Scenario"]
+        direction TB
+        GF["Google Form
+        (tool name, workspace URL, submitter email)"]
+        MT["Make Trigger
+        (Watch Form Responses)"]
+        GF --> MT
+    end
+
+    %% ── TOOL DISCOVERY (Make) ────────────────────────────
+    subgraph DISCOVERY["🌐 Make: Tool Discovery"]
+        direction TB
+        TD["ToolDiscovery
+        (validates + enriches intake data)"]
+        DEDUP{"Dedup Check
+        (Make Data Store: toolName + workspaceUrl)"}
+        TD --> DEDUP
+    end
+
+    MT -- "JSON payload:
+    {toolName, workspaceUrl, submittedBy}" --> DISCOVERY["🌐 Make : Tool Discovery"]
+
+    %% ── DEDUP SHORT-CIRCUITS ─────────────────────────────
+    DUP_NOTIFY["🌐 Make Email Module
+    (notify submitter: already connected / in-progress)"]
+    DEDUP -- "Same tool,
+    same workspace" --> DUP_NOTIFY
+
+    %% ── CLASSIFICATION ───────────────────────────────────
+    subgraph CLASSIFY["Classification"]
+        direction TB
+        TP["🖥️ ToolsParser
+        (extracts API docs, endpoints, auth type)"]
+        GNC["🌐 GleanNativeChecker
+        (Make HTTP → Glean Admin API /connectors)"]
+        TP --> GNC
+    end
+
+    DEDUP -- "New tool" --> CLASSIFY["Classification"]
+
+    %% ── NATIVE CONNECTOR PATH (Make) ─────────────────────
+    subgraph NATIVE_PATH["🌐 Make: Native Connector"]
+        NC["NativeConnector
+        (Make HTTP → Glean Admin API /configure)"]
+    end
+
+    GNC -- "Native connector
+    exists" --> NATIVE_PATH["🌐 Make: Native Connector"]
+
+    %% ── CUSTOM ADAPTER PATH ──────────────────────────────
+    subgraph CUSTOM_PATH["Custom Adapter Path"]
+        direction TB
+        AR["🖥️ AdapterRegistry
+        (check for existing adapter)"]
+        AW["🖥️ AdapterWriter
+        (OpenClaw AI generates adapter code)"]
+        SV["🖥️ SchemaValidator
+        (execute + validate against universal_schema.json)"]
+        QA{"QA Pass?
+        (🌐 Make Router)"}
+        RETRY["🌐 Retry w/ Failure Context
+        (Make feeds errors back to AdapterWriter)"]
+        HUMAN["Human Escalation
+        (full diagnostic payload)"]
+        AR -- "No existing adapter" --> AW
+        AW --> SV
+        SV --> QA
+        QA -- "Fail (1st attempt)" --> RETRY
+        RETRY --> AW
+        QA -- "Fail (2nd attempt)" --> HUMAN
+    end
+
+    GNC -- "No native
+    connector" --> CUSTOM_PATH["Custoom Adapter Path"]
+
+    %% ── FAILURE ESCALATION (Make) ────────────────────────
+    subgraph ESCALATE["🌐 Make: Failure Escalation"]
+        direction TB
+        SE["Slack Module
+        (alert ops engineering channel)"]
+        ET["Email Module
+        (diagnostic payload to on-call)"]
+        SE --> ET
+    end
+
+    HUMAN --> ESCALATE["🌐 Make: Failure Escalation"]
+    NC -- "config fails" --> ESCALATE["🌐 Make: Failure Escalation"]
+
+    %% ── SYNC LAYER ───────────────────────────────────────
+    subgraph SYNC["Sync Layer"]
+        direction TB
+        SS["🌐 SyncScheduler
+        (Make cron scenarios : per-tool triggers)"]
+        TIERS["Tiered Cadence
+        High: ~30min | Med: ~2hr | Low: ~12hr"]
+        DELTA["🖥️ SyncEngine
+        (pull delta → run adapter → push to Glean)"]
+        SS --> TIERS --> DELTA
+    end
+
+    QA -- "Pass" --> SYNC["Sync Layer"]
+    AR -- "Adapter found" --> SYNC["Sync Layer"]
+    DEDUP -- "Same tool,
+    new workspace" --> SYNC["Sync Layer"]
+
+    %% ── GLEAN TARGET ─────────────────────────────────────
+    GLEAN["Glean Indexing API
+    (documents pushed via custom connector
+    or synced via native connector)"]
+
+    DELTA --> GLEAN
+    NC --> GLEAN
+
+    %% ── SUCCESS NOTIFICATIONS (Make) ─────────────────────
+    subgraph NOTIFY["🌐 Make: Notifications"]
+        direction LR
+        SN["Slack Module
+        (integration status to ops channel)"]
+        EM["Email Module
+        (confirmation to original submitter)"]
+    end
+
+    GLEAN -- "on success" --> SN
+    GLEAN -- "on success" --> EM
+
+    %% ── STYLING ──────────────────────────────────────────
+    %% Make workflow layers : blue
+    style INTAKE fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px,color:#1E3A5F
+    style DISCOVERY fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px,color:#1E3A5F
+    style NATIVE_PATH fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px,color:#1E3A5F
+    style NOTIFY fill:#DBEAFE,stroke:#3B82F6,stroke-width:2px,color:#1E3A5F
+
+    %% Mixed layers (Make orchestration + compute services) : amber
+    style CLASSIFY fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+    style CUSTOM_PATH fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+    style SYNC fill:#FEF3C7,stroke:#D97706,stroke-width:2px,color:#78350F
+
+    %% Failure path : red
+    style ESCALATE fill:#FEE2E2,stroke:#DC2626,stroke-width:2px,color:#7F1D1D
+
+    %% Glean target : green
+    style GLEAN fill:#D1FAE5,stroke:#059669,stroke-width:3px,color:#064E3B
+
+    %% Legend : neutral
+    style LEGEND fill:#F3F4F6,stroke:#9CA3AF,stroke-width:1px,color:#374151
